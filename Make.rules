@@ -1,0 +1,135 @@
+EFISIGNED = $(patsubst %.efi,%-signed.efi,$(EFIFILES))
+MANPAGES = $(patsubst doc/%.1.in,doc/%.1,$(wildcard doc/*.1.in))
+HELP2MAN = help2man
+ARCH	 = $(shell uname -m | sed 's/i.86/ia32/;s/arm.*/arm/')
+ifeq ($(ARCH),ia32)
+ARCH3264 = -m32
+else ifeq ($(ARCH),x86_64)
+ARCH3264 =
+else ifeq ($(ARCH),aarch64)
+ARCH3264 =
+else ifeq ($(ARCH),arm)
+ARCH3264 =
+else
+$(error unknown architecture $(ARCH))
+endif
+INCDIR	   = -I$(TOPDIR)include/ -I/usr/include/efi -I/usr/include/efi/$(ARCH) -I/usr/include/efi/protocol
+CPPFLAGS   = -DCONFIG_$(ARCH)
+CFLAGS	   = -O2 -g $(ARCH3264) -fpic -Wall -fshort-wchar -fno-strict-aliasing -fno-merge-constants -fno-stack-protector -ffreestanding -fno-stack-check
+LDFLAGS	   = -nostdlib
+CRTOBJ		= crt0-efi-$(ARCH).o
+CRTPATHS	= /lib /lib64 /lib/efi /lib64/efi /usr/lib /usr/lib64 /usr/lib/efi /usr/lib64/efi /usr/lib/gnuefi /usr/lib64/gnuefi
+CRTPATH		= $(shell for f in $(CRTPATHS); do if [ -e $$f/$(CRTOBJ) ]; then echo $$f; break; fi; done)
+CRTOBJS		= $(CRTPATH)/$(CRTOBJ)
+# there's a bug in the gnu tools ... the .reloc section has to be
+# aligned otherwise the file alignment gets screwed up
+LDSCRIPT	= elf_$(ARCH)_efi.lds
+LDFLAGS		+= -shared -Bsymbolic $(CRTOBJS) -L $(CRTPATH) -L /usr/lib -L /usr/lib64 -T $(LDSCRIPT)
+LOADLIBES	= -lefi -lgnuefi $(shell $(CC) $(ARCH3264) -print-libgcc-file-name)
+FORMAT		= --target=efi-app-$(ARCH)
+OBJCOPY		= objcopy
+MYGUID		= 11111111-2222-3333-4444-123456789abc
+INSTALL		= install
+BINDIR		= $(DESTDIR)/usr/bin
+MANDIR		= $(DESTDIR)/usr/share/man/man1
+EFIDIR		= $(DESTDIR)/usr/share/efitools/efi
+DOCDIR		= $(DESTDIR)/usr/share/efitools
+
+# globally use EFI calling conventions (requires gcc >= 4.7)
+CFLAGS += -DGNU_EFI_USE_MS_ABI
+
+ifeq ($(ARCH),x86_64)
+  CFLAGS += -DEFI_FUNCTION_WRAPPER -mno-red-zone
+endif
+
+ifeq ($(ARCH),ia32)
+  CFLAGS += -mno-red-zone
+endif
+
+ifeq ($(ARCH),arm)
+  LDFLAGS += --defsym=EFI_SUBSYSTEM=0x0a
+  FORMAT = -O binary
+endif
+
+ifeq ($(ARCH),aarch64)
+  LDFLAGS += --defsym=EFI_SUBSYSTEM=0x0a
+  FORMAT = -O binary
+endif
+
+%.efi: %.so
+	$(OBJCOPY) -j .text -j .sdata -j .data -j .dynamic -j .dynsym \
+		   -j .rel -j .rela -j .rel.* -j .rela.* -j .rel* -j .rela* \
+		   -j .reloc $(FORMAT) $*.so $@
+%.so: %.o
+	$(LD) $(LDFLAGS) $^ -o $@ $(LOADLIBES)
+	# check we have no undefined symbols
+	nm -D $@ | grep ' U ' && exit 1 || exit 0
+
+%.h: %.auth
+	./xxdi.pl $< > $@
+
+%.hash: %.efi hash-to-efi-sig-list
+	./hash-to-efi-sig-list $< $@
+
+%-blacklist.esl: %.crt cert-to-efi-hash-list
+	./cert-to-efi-sig-list $< $@
+
+%-hash-blacklist.esl: %.crt cert-to-efi-hash-list
+	./cert-to-efi-hash-list $< $@
+
+%.esl: %.crt cert-to-efi-sig-list
+	./cert-to-efi-sig-list -g $(MYGUID) $< $@
+
+getcert = $(shell if [ "$(1)" = "PK" -o "$(1)" = "KEK" ]; then echo "-c PK.crt -k PK.key"; else echo "-c KEK.crt -k KEK.key"; fi)
+getvar = $(shell if [ "$(1)" = "PK" -o "$(1)" = "KEK" ]; then echo $(1); else echo db; fi)
+
+%.auth: %.esl PK.crt KEK.crt sign-efi-sig-list
+	./sign-efi-sig-list $(call getcert,$*) $(call getvar,$*) $< $@
+
+%-update.auth: %.esl PK.crt KEK.crt sign-efi-sig-list
+	./sign-efi-sig-list -a $(call getcert,$*) $(call getvar,$*) $< $@
+
+%-pkupdate.auth: %.esl PK.crt sign-efi-sig-list
+	./sign-efi-sig-list -a -c PK.crt -k PK.key $(call getvar,$*) $< $@
+
+%-blacklist.auth: %-blacklist.esl KEK.crt sign-efi-sig-list
+	./sign-efi-sig-list -a -c KEK.crt -k KEK.key dbx $< $@
+
+%-pkblacklist.auth: %-blacklist.esl PK.crt sign-efi-sig-list
+	./sign-efi-sig-list -a -c PK.crt -k PK.key dbx $< $@
+
+%.o: %.c
+	$(CC) $(INCDIR) $(CFLAGS) $(CPPFLAGS) -c $< -o $@
+
+%.efi.o: %.c
+	$(CC) $(INCDIR) $(CFLAGS) $(CPPFLAGS) -fno-toplevel-reorder -DBUILD_EFI -c $< -o $@
+
+%.efi.s: %.c
+	$(CC) -S $(INCDIR) $(CFLAGS) $(CPPFLAGS) -fno-toplevel-reorder -DBUILD_EFI -c $< -o $@
+
+%.crt:
+	openssl req -new -x509 -newkey rsa:2048 -subj "/CN=$*/" -keyout $*.key -out $@ -days 3650 -nodes -sha256
+
+%.cer: %.crt
+	openssl x509 -in $< -out $@ -outform DER
+
+%-subkey.csr:
+	openssl req -new -newkey rsa:2048 -keyout $*-subkey.key -subj "/CN=Subkey $* of KEK/" -out $@ -nodes
+
+%-subkey.crt: %-subkey.csr KEK.crt
+	openssl x509 -req -in $< -CA DB.crt -CAkey DB.key -set_serial 1 -out $@ -days 365
+
+%-signed.efi: %.efi DB.crt
+	sbsign --key DB.key --cert DB.crt --output $@ $<
+
+##
+# No need for KEK signing
+##
+#%-kek-signed.efi: %.efi KEK.crt
+#	sbsign --key KEK.key --cert KEK.crt --output $@ $<
+
+%.a:
+	ar rcv $@ $^
+
+doc/%.1: doc/%.1.in %
+	$(HELP2MAN) --no-info -i $< -o $@ ./$*
