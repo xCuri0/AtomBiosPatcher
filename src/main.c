@@ -3,7 +3,8 @@
 
 #include "types.h"
 #include "util.h"
-#include "data.h"
+
+#define ACPI_OFFSET 0x68
 
 /**
  * The Print function signature.
@@ -66,28 +67,37 @@ static ACPI_SDT_HEADER* HandleAcpiTables() {
 	return table;
 }
 
-void ReplaceACPI() {
+void ReplaceACPI(void* atom, UINTN s) {
     ACPI_SDT_HEADER* table = HandleAcpiTables(0);
 
-    CopyMem(table, data, sizeof(data));
-	SetAcpiSdtChecksum(table);
+	Print(L"Patching VFCT ATOMBIOS at %x\n", table);
 
-    Print(L"Loaded into VFCT\n");
+    CopyMem(table, atom, s);
+	SetAcpiSdtChecksum(table);
 }
 
 EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *ST_) {
-	InitializeLib(image_handle, ST_);
-
+	UINTN size_ptr = 0;
 	EFI_LOADED_IMAGE* image;
+
+	InitializeLib(image_handle, ST_);
     if (EFI_ERROR(BS->HandleProtocol(image_handle, &LoadedImageProtocol, (void**) &image))) {
 		Debug(L"HackACPI: LOADED_IMAGE_PROTOCOL failed.\n");
         return 1;
 	}
 	EFI_FILE_HANDLE root_dir = LibOpenRoot(image->DeviceHandle);
 
-	Print(L"[AtomBiosPatcher]\n");
+	Print(L"AtomBiosPatcher\n\n");
 
-    ReplaceACPI(); // should pass the file here
+	Print(L"Loading ATOM.bin\n");
+
+	void* atom = LoadFile(root_dir, L"ATOM.bin", &size_ptr);
+	if (!atom) {
+		Print(L"Failed to load ATOM.bin\n");
+		return 1;
+	}
+	ReplaceACPI(atom, size_ptr);
+
 	/*
 	TODO: Replace Platform ROM
 	*/

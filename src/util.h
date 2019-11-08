@@ -10,3 +10,15 @@
  * @return The UCS2 string, statically allocated, null-terminated.
  */
 extern const CHAR16* TmpStr(CHAR8 *src, int length);
+
+/**
+ * Load a file, allocate some extra bytes as well.
+ */
+extern void* LoadFileWithPadding(EFI_FILE_HANDLE dir, const CHAR16* path, UINTN* size_ptr, UINTN padding);
+
+/**
+ * Load a file.
+ */
+static inline void* LoadFile(EFI_FILE_HANDLE dir, const CHAR16* path, UINTN* size_ptr) {
+	return LoadFileWithPadding(dir, path, size_ptr, 0);
+}
