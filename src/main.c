@@ -68,12 +68,12 @@ static ACPI_SDT_HEADER* HandleAcpiTables() {
 }
 
 void ReplaceACPI(void* atom, UINTN s) {
-    ACPI_SDT_HEADER* table = HandleAcpiTables(0);
+    void* addr = HandleAcpiTables(0); // Address of VFCT table + ACPI_OFFSET
 
-	Print(L"Patching VFCT ATOMBIOS at %x\n", table);
+	Print(L"Patching VFCT ATOMBIOS at %x\n", addr + ACPI_OFFSET);
+    CopyMem(addr + ACPI_OFFSET, atom, s);
 
-    CopyMem(table, atom, s);
-	SetAcpiSdtChecksum(table);
+	SetAcpiSdtChecksum(addr);
 }
 
 EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *ST_) {
@@ -91,15 +91,17 @@ EFI_STATUS efi_main(EFI_HANDLE image_handle, EFI_SYSTEM_TABLE *ST_) {
 
 	Print(L"Loading ATOM.bin\n");
 
-	void* atom = LoadFile(root_dir, L"ATOM.bin", &size_ptr);
+	char *atom = LoadFile(root_dir, L"ATOM.bin", &size_ptr);
 	if (!atom) {
 		Print(L"Failed to load ATOM.bin\n");
 		return 1;
 	}
+	Print(L"%x %x %x", atom[0], atom[1], atom[2]);
+	if (atom[0] != 0x55) {
+		Print(L"ATOM.bin doesn't contain a valid AtomBios\n");
+		return 1;
+	}
 	ReplaceACPI(atom, size_ptr);
 
-	/*
-	TODO: Replace Platform ROM
-	*/
 	return 0;
 }
