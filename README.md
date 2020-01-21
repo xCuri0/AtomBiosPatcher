@@ -2,7 +2,7 @@
 Load a custom AtomBios to unlock graphics card features. Currently this tool only supports loading to the ACPI VFCT table which in my testing only Linux used. Probably will only work on pure-UEFI APU systems
 
 # Windows
-To use on Windows uninstall the GPU from device manager (keep software), reboot and it should automatically install back. During all these steps make sure you boot with AtomBiosPatcher (and in the future too so it doesn't get overwritten)
+If it appears that the ATOMBIOS hasn't changed, uninstall the GPU from device manager (keep software), reboot and it should automatically install back. During all these steps make sure you boot with AtomBiosPatcher (and in the future too so it doesn't get overwritten)
 
 # Credit
 HackBGRT (alot of code reused from it)
